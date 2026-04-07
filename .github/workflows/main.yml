@@ -11,86 +11,54 @@ jobs:
   pipeline:
     runs-on: ubuntu-latest
 
+    # Define o banco de dados como um serviço (Rápido e Isolado)
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: codigos_db
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
     steps:
-      # ------------------------------------------------------------------
-      # 1. Checkout
-      # ------------------------------------------------------------------
       - name: Checkout do repositorio
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Atualizado para v4
 
-      # ------------------------------------------------------------------
-      # 2. Instalar MySQL Server
-      # ------------------------------------------------------------------
-      - name: Instalar MySQL Server
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Não é necessário instalar o mysql-server, apenas o cliente para rodar os comandos
+      - name: Instalar MySQL Client e dependências Python
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y mysql-server
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+          pip install -r requirements.txt
 
-      # ------------------------------------------------------------------
-      # 3. Iniciar servico MySQL e aguardar estar pronto
-      # ------------------------------------------------------------------
-      - name: Iniciar e aguardar MySQL
-        run: |
-          sudo systemctl start mysql
-          for i in $(seq 1 30); do
-            if sudo mysqladmin ping --silent 2>/dev/null; then
-              echo "MySQL pronto."
-              break
-            fi
-            echo "Aguardando MySQL... ($i)"
-            sleep 2
-          done
-
-      # ------------------------------------------------------------------
-      # 4. Configurar usuario ciuser
-      # ------------------------------------------------------------------
+      # Criamos o usuário que seu teste espera
       - name: Configurar usuario MySQL
         run: |
-          sudo mysql -e "CREATE USER 'ciuser'@'127.0.0.1' IDENTIFIED BY 'cipassword';"
-          sudo mysql -e "GRANT ALL PRIVILEGES ON *.* TO 'ciuser'@'127.0.0.1' WITH GRANT OPTION;"
-          sudo mysql -e "FLUSH PRIVILEGES;"
+          mysql -h 127.0.0.1 -u root -prootpassword -e "CREATE USER 'ciuser'@'%' IDENTIFIED BY 'cipassword';"
+          mysql -h 127.0.0.1 -u root -prootpassword -e "GRANT ALL PRIVILEGES ON *.* TO 'ciuser'@'%' WITH GRANT OPTION;"
+          mysql -h 127.0.0.1 -u root -prootpassword -e "FLUSH PRIVILEGES;"
 
-      # ------------------------------------------------------------------
-      # 5. Instalar Python 3 e bibliotecas
-      # ------------------------------------------------------------------
-      - name: Instalar Python e bibliotecas
-        run: |
-          sudo apt-get install -y python3 python3-pip
-          pip3 install --break-system-packages -r requirements.txt
-
-      # ------------------------------------------------------------------
-      # 6. Criar banco de dados, tabela e inserir dados iniciais
-      # ------------------------------------------------------------------
       - name: Executar setup.sql
         run: |
-          mysql -h 127.0.0.1 -u ciuser -pcipassword < setup.sql
+          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db < setup.sql
 
-      # ------------------------------------------------------------------
-      # 7. Verificar banco e tabela criados
-      # ------------------------------------------------------------------
       - name: Verificar banco e tabela
         run: |
-          echo "=== Bancos de dados ==="
-          mysql -h 127.0.0.1 -u ciuser -pcipassword -e "SHOW DATABASES;"
-          echo "=== Estrutura da tabela ==="
-          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db \
-            -e "DESCRIBE codigos_sequenciais;"
-          echo "=== Dados iniciais ==="
-          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db \
-            -e "SELECT * FROM codigos_sequenciais ORDER BY id;"
+          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db -e "SHOW TABLES; DESCRIBE codigos_sequenciais;"
 
-      # ------------------------------------------------------------------
-      # 8. Executar testes automatizados com pytest
-      # ------------------------------------------------------------------
       - name: Executar testes com pytest
+        env:
+          # Dica: Passe as credenciais via variáveis de ambiente se o seu código Python suportar
+          DB_HOST: 127.0.0.1
+          DB_USER: ciuser
+          DB_PASS: cipassword
+          DB_NAME: codigos_db
         run: |
           pytest test_codigos.py -v --tb=short
-
-      # ------------------------------------------------------------------
-      # 9. Selecionar codigos adicionados pelo teste (evidencia final)
-      # ------------------------------------------------------------------
-      - name: Selecionar codigos adicionados pelos testes
-        run: |
-          echo "=== Codigos presentes apos execucao dos testes ==="
-          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db \
-            -e "SELECT * FROM codigos_sequenciais ORDER BY id;"
