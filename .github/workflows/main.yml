@@ -1,0 +1,96 @@
+name: CI/CD Pipeline - Codigos Sequenciais
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------------------------------
+      - name: Checkout do repositorio
+        uses: actions/checkout@v3
+
+      # ------------------------------------------------------------------
+      # 2. Instalar MySQL Server
+      # ------------------------------------------------------------------
+      - name: Instalar MySQL Server
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mysql-server
+
+      # ------------------------------------------------------------------
+      # 3. Iniciar servico MySQL e aguardar estar pronto
+      # ------------------------------------------------------------------
+      - name: Iniciar e aguardar MySQL
+        run: |
+          sudo systemctl start mysql
+          for i in $(seq 1 30); do
+            if sudo mysqladmin ping --silent 2>/dev/null; then
+              echo "MySQL pronto."
+              break
+            fi
+            echo "Aguardando MySQL... ($i)"
+            sleep 2
+          done
+
+      # ------------------------------------------------------------------
+      # 4. Configurar usuario ciuser
+      # ------------------------------------------------------------------
+      - name: Configurar usuario MySQL
+        run: |
+          sudo mysql -e "CREATE USER 'ciuser'@'127.0.0.1' IDENTIFIED BY 'cipassword';"
+          sudo mysql -e "GRANT ALL PRIVILEGES ON *.* TO 'ciuser'@'127.0.0.1' WITH GRANT OPTION;"
+          sudo mysql -e "FLUSH PRIVILEGES;"
+
+      # ------------------------------------------------------------------
+      # 5. Instalar Python 3 e bibliotecas
+      # ------------------------------------------------------------------
+      - name: Instalar Python e bibliotecas
+        run: |
+          sudo apt-get install -y python3 python3-pip
+          pip3 install --break-system-packages -r requirements.txt
+
+      # ------------------------------------------------------------------
+      # 6. Criar banco de dados, tabela e inserir dados iniciais
+      # ------------------------------------------------------------------
+      - name: Executar setup.sql
+        run: |
+          mysql -h 127.0.0.1 -u ciuser -pcipassword < setup.sql
+
+      # ------------------------------------------------------------------
+      # 7. Verificar banco e tabela criados
+      # ------------------------------------------------------------------
+      - name: Verificar banco e tabela
+        run: |
+          echo "=== Bancos de dados ==="
+          mysql -h 127.0.0.1 -u ciuser -pcipassword -e "SHOW DATABASES;"
+          echo "=== Estrutura da tabela ==="
+          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db \
+            -e "DESCRIBE codigos_sequenciais;"
+          echo "=== Dados iniciais ==="
+          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db \
+            -e "SELECT * FROM codigos_sequenciais ORDER BY id;"
+
+      # ------------------------------------------------------------------
+      # 8. Executar testes automatizados com pytest
+      # ------------------------------------------------------------------
+      - name: Executar testes com pytest
+        run: |
+          pytest test_codigos.py -v --tb=short
+
+      # ------------------------------------------------------------------
+      # 9. Selecionar codigos adicionados pelo teste (evidencia final)
+      # ------------------------------------------------------------------
+      - name: Selecionar codigos adicionados pelos testes
+        run: |
+          echo "=== Codigos presentes apos execucao dos testes ==="
+          mysql -h 127.0.0.1 -u ciuser -pcipassword codigos_db \
+            -e "SELECT * FROM codigos_sequenciais ORDER BY id;"
